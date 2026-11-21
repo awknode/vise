@@ -1,0 +1,27 @@
+[package]
+name = "vise"
+version = "0.3.0"
+edition = "2021"
+authors = ["awk studios"]
+description = "VISE: six-model compressor (vari-mu, DS, FAT, ALPHA, SH-A, SH-B)"
+
+[workspace]
+members = ["xtask"]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+serde_json = "1"
+realfft = "3"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
+# AWKNODE: patched nih-plug, mounted at /nih-plug-awk by build.sh
+[patch."https://github.com/robbert-vdh/nih-plug.git"]
+nih_plug = { path = "/nih-plug-awk" }
+nih_plug_egui = { path = "/nih-plug-awk/nih_plug_egui" }
