@@ -54,6 +54,9 @@ pub const LISTEN_NAMES: [&str; 3] = ["OFF", "SC", "DELTA"];
 pub struct ViseParams {
     #[persist = "editor-state"]
     pub editor_state: Arc<EguiState>,
+    /// AUTO GAIN's learned make-up, saved with the project
+    #[persist = "learned-gain"]
+    pub learned: Arc<atomic_float::AtomicF32>,
     #[id = "model"]
     pub model: IntParam,
     #[id = "k0"]
@@ -104,6 +107,7 @@ impl Default for ViseParams {
     fn default() -> Self {
         Self {
             editor_state: EguiState::from_size(editor::WIDTH, editor::HEIGHT),
+            learned: Arc::new(atomic_float::AtomicF32::new(0.0)),
             model: IntParam::new("Model", 3, IntRange::Linear { min: 0, max: 5 }).with_value_to_string(Arc::new(|v| comp::MODELS[v.clamp(0, 5) as usize].to_string())),
             k0: k("Input / Thresh", 0.4),
             k1: k("Ratio / Mode", 0.5),
@@ -175,6 +179,12 @@ pub struct Engine {
 }
 
 impl Engine {
+    pub fn learned(&self) -> f32 {
+        self.comp.learned()
+    }
+    pub fn seed_learned(&mut self, v: f32) {
+        self.comp.seed_learned(v);
+    }
     pub fn new(sr: f32, os: i32) -> Self {
         let comp = comp::Comp::new(sr, oversample::factor_for(os));
         let lat = comp.latency();
@@ -324,6 +334,7 @@ impl Plugin for Vise {
     }
     fn initialize(&mut self, _layout: &AudioIOLayout, cfg: &BufferConfig, ctx: &mut impl InitContext<Self>) -> bool {
         self.eng = Engine::new(cfg.sample_rate, self.params.os.value()).with_shared(self.shared.clone());
+        self.eng.seed_learned(self.params.learned.load(Ordering::Relaxed));
         ctx.set_latency_samples(self.eng.lat as u32);
         true
     }
@@ -335,7 +346,9 @@ impl Plugin for Vise {
         let os = p.os.value();
         if oversample::factor_for(os) != self.eng.os_factor() {
             let sr = self.eng.sr;
+            let g = self.eng.learned();
             self.eng = Engine::new(sr, os).with_shared(self.shared.clone());
+            self.eng.seed_learned(g);
             ctx.set_latency_samples(self.eng.lat as u32);
         }
         let ks = p.knobs();
@@ -359,6 +372,7 @@ impl Plugin for Vise {
         let (a, b) = sl.split_at_mut(1);
         let key = aux.inputs.first_mut().map(|k| k.as_slice_immutable()).filter(|k| !k.is_empty()).map(|k| (&*k[0], if k.len() > 1 { &*k[1] } else { &*k[0] }));
         self.eng.process_key(&mut *a[0], &mut *b[0], key, &st);
+        self.params.learned.store(self.eng.learned(), Ordering::Relaxed);
         if n > 0 {
             for k in ks {
                 k.smoothed.next_step(n);

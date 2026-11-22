@@ -223,3 +223,28 @@ fn knob_at_zero_does_not_compress() {
         assert!(mx < 0.5, "{} compresses {mx:.1} dB with the knob at 0", comp::MODELS[m]);
     }
 }
+
+/// Hosts reset on play/stop. The first kick after play must sound like the rest:
+/// AUTO GAIN keeps what it learned instead of starting again from unity.
+#[test]
+fn first_hit_after_play_stop_matches() {
+    const SR: f32 = 48000.0;
+    let kick = |i: usize| { let t = i as f32 / SR; 0.7 * (-t * 12.0).exp() * (std::f32::consts::TAU * (50.0 + 80.0 * (-t * 30.0).exp()) * t).sin() };
+    let kicks = |n: usize| { let mut x = vec![]; for _ in 0..n { x.extend((0..24000).map(kick)); } x };
+    let pk = |y: &[f32], k: usize| 20.0 * y[24000 + k * 24000..24000 + k * 24000 + 4800].iter().fold(0.0f32, |m, v| m.max(v.abs())).log10();
+    for model in 0..6 {
+        for (k0, tol) in [(0.3f32, 0.7f32), (0.6, 2.0)] {
+            let st = State { model, k: [k0, 0.5, 0.3, 0.4, 0.3, 1.0, 0.2], safe: false, ..State::default() };
+            let mut e = Engine::new(SR, 1);
+            let (mut l, mut r) = (kicks(8), kicks(8));
+            for (p, q) in l.chunks_mut(256).zip(r.chunks_mut(256)) { e.process(p, q, &st); }
+            e.reset();
+            let mut x = vec![0.0f32; 24000];
+            x.extend(kicks(8));
+            let (mut l, mut r) = (x.clone(), x);
+            for (p, q) in l.chunks_mut(256).zip(r.chunks_mut(256)) { e.process(p, q, &st); }
+            let d = pk(&l, 0) - pk(&l, 7);
+            assert!(d.abs() < tol, "model {model} k0 {k0}: first kick after play {d:+.2} dB vs the 8th");
+        }
+    }
+}
