@@ -24,3 +24,7 @@ atomic_float = "1.1"
 lto = "thin"
 strip = "symbols"
 
+
+# FL Studio fixes: patched baseview (vsync, paint, DPI, dummy-window crash). See nice-plug-awk/patches.
+[patch.crates-io]
+baseview = { path = "/nice-plug-awk/patches/baseview-0.4.2" }
