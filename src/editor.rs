@@ -7,9 +7,9 @@
 use crate::awk_ui::*;
 use crate::presets::PresetBar;
 use crate::{comp, get, Shared, ViseParams};
-use nih_plug::prelude::*;
-use nih_plug_egui::create_egui_editor;
-use nih_plug_egui::egui::{self, pos2, vec2, Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Mesh, Painter, Pos2, Rect, Response, Sense, Shape, Stroke};
+use nice_plug::prelude::*;
+use nice_plug_egui::create_egui_editor;
+use egui::{pos2, vec2, Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Mesh, Painter, Pos2, Rect, Response, Sense, Shape, Stroke};
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 use std::sync::atomic::Ordering;
@@ -52,10 +52,16 @@ fn new_state(name: &'static str) -> St {
     St { presets: PresetBar::new(name), skin, hist: VecDeque::with_capacity(HIST + 1), needle: 0.0, pk: 0.0, pk_t: 0.0 }
 }
 
-pub(crate) fn create(params: Arc<ViseParams>, shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
+pub(crate) fn create(params: Arc<ViseParams>, shared: Arc<Shared>) -> Option<crate::nice_app::AwkEditor> {
     let state = params.editor_state.clone();
     let st = new_state("Vise");
-    create_egui_editor(state, st, |ctx, _| fonts(ctx), move |ctx, setter, st| frame(ctx, setter, st, params.as_ref(), shared.as_ref()))
+    create_egui_editor(state, nice_plug_egui::RepaintNotifier::new(), nice_plug_egui::EguiNiceSettings::default(), crate::nice_app::AwkApp::new(fonts, {
+        let mut __st = st;
+        Box::new(move |ctx: &mut egui::Ui, setter: &ParamSetter| {
+            let st = &mut __st;
+            frame(ctx, setter, st, params.as_ref(), shared.as_ref())
+        })
+    }))
 }
 
 fn fonts(ctx: &egui::Context) {
@@ -142,8 +148,8 @@ fn panel(pa: &Painter, r: Rect, tag: &str, title: &str) {
     txt(pa, t.center(), Align2::CENTER_CENTER, tag, mono(10.0), BG, 0.0);
     txt(pa, t.right_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, title, mono(10.0), DIMT, 1.5);
 }
-fn chip(ui: &mut egui::Ui, r: Rect, s: &str, on: bool, col: Color32, id: impl std::hash::Hash) -> Response {
-    let resp = ui.interact(r, ui.id().with(("chip", id)), Sense::click());
+fn chip(ui: &mut egui::Ui, r: Rect, s: &str, on: bool, col: Color32, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
+    let resp = ui.interact(r, ui.scope_id().with(("chip", id)), Sense::click());
     let pa = ui.painter();
     let pts = chamfer(r, 5.0);
     pa.add(Shape::convex_polygon(pts, if on { alpha(col, 0.18) } else if resp.hovered() { PANEL_HI } else { PANEL }, Stroke::new(1.0, if on { col } else { EDGE })));
@@ -175,9 +181,9 @@ fn brushed(pa: &Painter, c: Pos2, r0: f32, r1: f32, rot: f32) {
 
 /// Knob: recessed well, 27-segment LED ring (brightening toward the tip), brushed cap, glowing pointer.
 #[allow(clippy::too_many_arguments)]
-fn knob(ui: &mut egui::Ui, setter: &ParamSetter, c: Pos2, r: f32, param: &FloatParam, label: &str, value: &str, col: Color32, id: impl std::hash::Hash) -> Response {
+fn knob(ui: &mut egui::Ui, setter: &ParamSetter, c: Pos2, r: f32, param: &FloatParam, label: &str, value: &str, col: Color32, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
     let rect = Rect::from_center_size(c, vec2(r * 2.0 + 28.0, r * 2.0 + 28.0));
-    let uid = ui.id().with(("knob", id));
+    let uid = ui.scope_id().with(("knob", id));
     let resp = ui.interact(rect, uid, Sense::click_and_drag());
     knob_input(ui, setter, &resp, uid.with("d"), param);
     let pa = ui.painter();
@@ -214,7 +220,9 @@ fn knob(ui: &mut egui::Ui, setter: &ParamSetter, c: Pos2, r: f32, param: &FloatP
     resp
 }
 
-fn frame(ctx: &egui::Context, setter: &ParamSetter, st: &mut St, p: &ViseParams, sh: &Shared) {
+fn frame(root: &mut egui::Ui, setter: &ParamSetter, st: &mut St, p: &ViseParams, sh: &Shared) {
+    let ctx_owned = root.ctx().clone();
+    let ctx = &ctx_owned;
     ctx.request_repaint_after(std::time::Duration::from_millis(16));
     st.skin.begin(ctx);
     let gr_now = get(&sh.gr);
@@ -229,7 +237,7 @@ fn frame(ctx: &egui::Context, setter: &ParamSetter, st: &mut St, p: &ViseParams,
         st.pk = gr_now;
         st.pk_t = now;
     }
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(BG)).show(ctx, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(BG)).show(root, |ui| {
         let whole = ui.max_rect();
         let o = whole.min.to_vec2() + vec2(0.0, TOP);
         let at = |x: f32, y: f32| pos2(x, y) + o;
@@ -282,7 +290,7 @@ fn routing(ui: &mut egui::Ui, setter: &ParamSetter, p: &ViseParams, sh: &Shared,
     // LINK: a horizontal fader
     txt(&pa, at(772.0, y1), Align2::LEFT_CENTER, "LINK", mono(9.0), DIMT, 1.5);
     let bar = Rect::from_min_size(at(806.0, y1 - 9.0), vec2(166.0, 18.0));
-    let id = ui.id().with("link");
+    let id = ui.scope_id().with("link");
     let resp = ui.interact(bar, id, Sense::click_and_drag()).on_hover_text("Stereo link: 100% = one gain for both channels, 0% = each on its own. Double-click: 100%");
     if resp.double_clicked() {
         setter.begin_set_parameter(&p.link);
@@ -352,7 +360,7 @@ fn models(ui: &mut egui::Ui, setter: &ParamSetter, p: &ViseParams, model: usize,
     let tw = (r.width() - 40.0) / 6.0;
     for i in 0..6 {
         let tr = Rect::from_min_size(pos2(r.left() + i as f32 * (tw + 8.0), r.top()), vec2(tw, r.height()));
-        let resp = ui.interact(tr, ui.id().with(("model", i)), Sense::click());
+        let resp = ui.interact(tr, ui.scope_id().with(("model", i)), Sense::click());
         if resp.clicked() {
             set_int(setter, &p.model, i as i32);
         }
@@ -545,19 +553,17 @@ fn footer(ui: &mut egui::Ui, setter: &ParamSetter, p: &ViseParams, sh: &Shared, 
 mod tests {
     use super::*;
     use crate::{Engine, State};
-    use nih_plug::context::gui::GuiContext;
-    use nih_plug::wrapper::state::PluginState;
-    use nih_plug_egui::egui::{epaint, Event, ImageData, Modifiers, PointerButton, RawInput, TextureId, TextureWrapMode, Vec2};
+    use nice_plug::context::gui::GuiContextInner;
+    use nice_plug::plugin::PluginState;
+    use egui::{epaint, Event, ImageData, Modifiers, PointerButton, RawInput, TextureId, TextureWrapMode, Vec2};
     use std::collections::HashMap;
 
     struct Mock;
-    impl GuiContext for Mock {
+    impl GuiContextInner for Mock {
         fn plugin_api(&self) -> PluginApi {
             PluginApi::Vst3
         }
-        fn request_resize(&self) -> bool {
-            true
-        }
+        fn request_restart(&self) {}
         unsafe fn raw_begin_set_parameter(&self, _p: ParamPtr) {}
         unsafe fn raw_set_parameter_normalized(&self, _p: ParamPtr, _n: f32) {}
         unsafe fn raw_end_set_parameter(&self, _p: ParamPtr) {}
@@ -573,10 +579,9 @@ mod tests {
         repeat: bool,
     }
     fn apply_delta(texs: &mut HashMap<TextureId, Tex>, out: &egui::FullOutput) {
-        for (id, d) in &out.textures_delta.set {
+        for (id, d) in out.textures_delta.set.iter().flat_map(|(id, ds)| ds.iter().map(move |d| (id, d))) {
             let (w, h, px): (usize, usize, Vec<[f32; 4]>) = match &d.image {
                 ImageData::Color(c) => (c.size[0], c.size[1], c.pixels.iter().map(|p| [p.r() as f32 / 255.0, p.g() as f32 / 255.0, p.b() as f32 / 255.0, p.a() as f32 / 255.0]).collect()),
-                ImageData::Font(f) => (f.size[0], f.size[1], f.srgba_pixels(None).map(|p| [p.r() as f32 / 255.0, p.g() as f32 / 255.0, p.b() as f32 / 255.0, p.a() as f32 / 255.0]).collect()),
             };
             let repeat = d.options.wrap_mode == TextureWrapMode::Repeat;
             if let Some(pos) = d.pos {
@@ -666,8 +671,8 @@ mod tests {
         for y in (50..680).step_by(19) {
             for x in (10..990).step_by(37) {
                 let q = Pos2::new(x as f32, y as f32);
-                let _ = ctx.run(raw(i, vec![Event::PointerMoved(q), Event::PointerButton { pos: q, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]), |c| frame(c, &setter, &mut st, &p, &sh));
-                let _ = ctx.run(raw(i + 1, vec![Event::PointerButton { pos: q, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]), |c| frame(c, &setter, &mut st, &p, &sh));
+                let _ = ctx.run_ui(raw(i, vec![Event::PointerMoved(q), Event::PointerButton { pos: q, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]), |c| frame(c, &setter, &mut st, &p, &sh));
+                let _ = ctx.run_ui(raw(i + 1, vec![Event::PointerButton { pos: q, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]), |c| frame(c, &setter, &mut st, &p, &sh));
                 i += 2;
             }
         }
@@ -684,7 +689,7 @@ mod tests {
             let rects: Vec<Rect> = (0..labels.len()).map(|i| Rect::from_min_size(pos2(40.0 + (i % 4) as f32 * 200.0, 80.0 + (i / 4) as f32 * 60.0), vec2(if labels[i].len() > 3 { 100.0 } else { 44.0 }, 18.0))).collect();
             let mut last = None;
             for f in 0..3 {
-                let out = ctx.run(raw(f, vec![]), |c| {
+                let out = ctx.run_ui(raw(f, vec![]), |c| {
                     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(BG)).show(c, |ui| {
                         for (i, r) in rects.iter().enumerate() {
                             let _ = chip(ui, *r, labels[i], on, AMBER, ("t", i));
@@ -787,7 +792,7 @@ mod tests {
             st.needle = meter_frac(*vu as usize, v);
             let mut last = None;
             for f in 0..3 {
-                last = Some(ctx.run(raw(n * 10 + f, vec![]), |c| frame(c, &setter, &mut st, &p, &sh)));
+                last = Some(ctx.run_ui(raw(n * 10 + f, vec![]), |c| frame(c, &setter, &mut st, &p, &sh)));
                 if f < 2 {
                     apply_delta(&mut texs, last.as_ref().unwrap());
                 }

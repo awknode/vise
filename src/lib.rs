@@ -7,15 +7,17 @@
 //! key (SC EXT). LINK sets how much the two channels share one gain. LISTEN: SC (what the
 //! detector hears) or Δ DELTA (only what the compression takes out).
 
-use nih_plug::prelude::*;
-use nih_plug_egui::EguiState;
+use nice_plug::prelude::*;
+use nice_plug_egui::EguiEditorState;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 mod awk_ui;
 pub mod comp;
 pub mod dsp;
+
 mod editor;
+mod nice_app;
 mod oversample;
 mod presets;
 
@@ -52,8 +54,8 @@ pub const LISTEN_NAMES: [&str; 3] = ["OFF", "SC", "DELTA"];
 
 #[derive(Params)]
 pub struct ViseParams {
-    #[persist = "editor-state"]
-    pub editor_state: Arc<EguiState>,
+    /// window size (nice-plug keeps hosts in charge of it; not persisted)
+    pub editor_state: Arc<EguiEditorState>,
     /// AUTO GAIN's learned make-up, saved with the project
     #[persist = "learned-gain"]
     pub learned: Arc<atomic_float::AtomicF32>,
@@ -106,7 +108,7 @@ fn k(name: &str, def: f32) -> FloatParam {
 impl Default for ViseParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(editor::WIDTH, editor::HEIGHT),
+            editor_state: EguiEditorState::from_size(nice_plug::editor::dpi::LogicalSize::new((editor::WIDTH) as f64, (editor::HEIGHT) as f64), 1.0),
             learned: Arc::new(atomic_float::AtomicF32::new(0.0)),
             model: IntParam::new("Model", 3, IntRange::Linear { min: 0, max: 5 }).with_value_to_string(Arc::new(|v| comp::MODELS[v.clamp(0, 5) as usize].to_string())),
             k0: k("Input / Thresh", 0.4),
@@ -323,16 +325,17 @@ impl Plugin for Vise {
     }];
     const MIDI_INPUT: MidiConfig = MidiConfig::None;
     const SAMPLE_ACCURATE_AUTOMATION: bool = false;
+    type Editor = crate::nice_app::AwkEditor;
     type SysExMessage = ();
     type BackgroundTask = ();
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
     }
-    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Self::Editor> {
         editor::create(self.params.clone(), self.shared.clone())
     }
-    fn initialize(&mut self, _layout: &AudioIOLayout, cfg: &BufferConfig, ctx: &mut impl InitContext<Self>) -> bool {
+    fn activate(&mut self, _layout: &AudioIOLayout, cfg: &BufferConfig, ctx: &mut impl ActivateContext<Self>) -> bool {
         self.eng = Engine::new(cfg.sample_rate, self.params.os.value()).with_shared(self.shared.clone());
         self.eng.seed_learned(self.params.learned.load(Ordering::Relaxed));
         ctx.set_latency_samples(self.eng.lat as u32);
@@ -397,5 +400,5 @@ impl Vst3Plugin for Vise {
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx, Vst3SubCategory::Dynamics];
 }
 
-nih_export_clap!(Vise);
-nih_export_vst3!(Vise);
+nice_export_clap!(Vise);
+nice_export_vst3!(Vise);
