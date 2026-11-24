@@ -1,5 +1,5 @@
-//! VISE — awk studios. Six compressor models in one box:
-//! 670 (vari-mu), DS, FAT, ALPHA, SH-A, SH-B. Each model has its own knob set
+//! VISE — awk studios. Eight compressor models in one box:
+//! 670 (vari-mu), DS, FAT, ALPHA, SH-A, SH-B, 76 (FET), 2A (opto), plus a PUSH-PULL EQ. Each model has its own knob set
 //! (the labels change with the model), COLOR, AUTO GAIN and a sidechain high-pass.
 //!
 //! in ─► [M/S] ─► COMP (oversampled colour stage) ─► [L/R] ─► MIX against the dry (delayed
@@ -15,6 +15,7 @@ use std::sync::Arc;
 mod awk_ui;
 pub mod comp;
 pub mod dsp;
+pub mod pultec;
 
 mod editor;
 mod nice_app;
@@ -85,16 +86,43 @@ pub struct ViseParams {
     pub safe: BoolParam,
     #[id = "bypass"]
     pub bypass: BoolParam,
+    /// Window size (1.0 = 100%), saved with the project. 0 = not set: open at the default.
+    #[persist = "ui-scale"]
+    pub ui_scale: Arc<std::sync::RwLock<f32>>,
     #[id = "vu"]
     pub vu: IntParam,
     #[id = "link"]
     pub link: FloatParam,
+    /// M / S mode: how much of the compression the mid and the side get (100% = fully compressed)
+    #[id = "ms_mid"]
+    pub ms_mid: FloatParam,
+    #[id = "ms_side"]
+    pub ms_side: FloatParam,
     #[id = "chan"]
     pub chan: IntParam,
     #[id = "ext"]
     pub ext: BoolParam,
     #[id = "listen"]
     pub listen: IntParam,
+    /// v0.4 PUSH-PULL EQ (EQP-1A style) after the compressor
+    #[id = "eq_on"]
+    pub eq_on: BoolParam,
+    #[id = "eq_lf"]
+    pub eq_lf: FloatParam,
+    #[id = "eq_lb"]
+    pub eq_lb: FloatParam,
+    #[id = "eq_la"]
+    pub eq_la: FloatParam,
+    #[id = "eq_hf"]
+    pub eq_hf: FloatParam,
+    #[id = "eq_hb"]
+    pub eq_hb: FloatParam,
+    #[id = "eq_bw"]
+    pub eq_bw: FloatParam,
+    #[id = "eq_ha"]
+    pub eq_ha: FloatParam,
+    #[id = "eq_hs"]
+    pub eq_hs: FloatParam,
 }
 
 fn k(name: &str, def: f32) -> FloatParam {
@@ -105,12 +133,24 @@ fn k(name: &str, def: f32) -> FloatParam {
         .with_unit("%")
 }
 
+fn pct_param(name: &str, def: f32) -> FloatParam {
+    FloatParam::new(name, def, FloatRange::Linear { min: 0.0, max: 1.0 })
+        .with_smoother(SmoothingStyle::Linear(20.0))
+        .with_value_to_string(formatters::v2s_f32_percentage(0))
+        .with_string_to_value(formatters::s2v_f32_percentage())
+        .with_unit("%")
+}
+
+fn eq_amt(name: &str) -> FloatParam {
+    FloatParam::new(name, 0.0, FloatRange::Linear { min: 0.0, max: 10.0 }).with_smoother(SmoothingStyle::Linear(30.0)).with_value_to_string(formatters::v2s_f32_rounded(1))
+}
+
 impl Default for ViseParams {
     fn default() -> Self {
         Self {
             editor_state: EguiEditorState::from_size(nice_plug::editor::dpi::LogicalSize::new((editor::WIDTH) as f64, (editor::HEIGHT) as f64), 1.0),
             learned: Arc::new(atomic_float::AtomicF32::new(0.0)),
-            model: IntParam::new("Model", 3, IntRange::Linear { min: 0, max: 5 }).with_value_to_string(Arc::new(|v| comp::MODELS[v.clamp(0, 5) as usize].to_string())),
+            model: IntParam::new("Model", 3, IntRange::Linear { min: 0, max: 7 }).with_value_to_string(Arc::new(|v| comp::MODELS[v.clamp(0, 7) as usize].to_string())),
             k0: k("Input / Thresh", 0.4),
             k1: k("Ratio / Mode", 0.5),
             k2: k("Attack / Time", 0.3),
@@ -123,15 +163,27 @@ impl Default for ViseParams {
             os: IntParam::new("Oversampling", 1, IntRange::Linear { min: 0, max: 3 }).with_value_to_string(Arc::new(|v| awk_ui::OS_NAMES[v.clamp(0, 3) as usize].to_string())),
             safe: awk_ui::safe_param(),
             bypass: awk_ui::bypass_param(),
+            ui_scale: Arc::new(std::sync::RwLock::new(0.0)),
             vu: IntParam::new("Meter", 0, IntRange::Linear { min: 0, max: 2 }).with_value_to_string(Arc::new(|v| METER_MODES[v.clamp(0, 2) as usize].to_string())).non_automatable(),
             link: FloatParam::new("Stereo Link", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 })
                 .with_smoother(SmoothingStyle::Linear(20.0))
                 .with_value_to_string(formatters::v2s_f32_percentage(0))
                 .with_string_to_value(formatters::s2v_f32_percentage())
                 .with_unit("%"),
+            ms_mid: pct_param("M/S Mid", 1.0),
+            ms_side: pct_param("M/S Side", 1.0),
             chan: IntParam::new("Channels", 0, IntRange::Linear { min: 0, max: 3 }).with_value_to_string(Arc::new(|v| CHAN_NAMES[v.clamp(0, 3) as usize].to_string())),
             ext: BoolParam::new("External Sidechain", false).with_value_to_string(Arc::new(|v| if v { "EXT".into() } else { "INT".into() })),
             listen: IntParam::new("Listen", 0, IntRange::Linear { min: 0, max: 2 }).with_value_to_string(Arc::new(|v| LISTEN_NAMES[v.clamp(0, 2) as usize].to_string())),
+            eq_on: BoolParam::new("EQ On", false).with_value_to_string(Arc::new(|v| if v { "ON".into() } else { "OFF".into() })),
+            eq_lf: FloatParam::new("EQ Low Freq", 2.0 / 3.0, FloatRange::Linear { min: 0.0, max: 1.0 }).with_value_to_string(Arc::new(|v| pultec::hz_text(pultec::pick(&pultec::LOW_HZ, v)))),
+            eq_lb: eq_amt("EQ Low Boost"),
+            eq_la: eq_amt("EQ Low Atten"),
+            eq_hf: FloatParam::new("EQ High Freq", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 }).with_value_to_string(Arc::new(|v| pultec::hz_text(pultec::pick(&pultec::HIGH_HZ, v)))),
+            eq_hb: eq_amt("EQ High Boost"),
+            eq_bw: FloatParam::new("EQ Bandwidth", 5.0, FloatRange::Linear { min: 0.0, max: 10.0 }).with_smoother(SmoothingStyle::Linear(30.0)).with_value_to_string(formatters::v2s_f32_rounded(1)),
+            eq_ha: eq_amt("EQ High Atten"),
+            eq_hs: FloatParam::new("EQ Atten Sel", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 }).with_value_to_string(Arc::new(|v| pultec::hz_text(pultec::pick(&pultec::ATT_HZ, v)))),
         }
     }
 }
@@ -151,16 +203,19 @@ pub struct State {
     pub bypass: bool,
     /// 0..1 stereo link
     pub link: f32,
+    pub ms_mid: f32,
+    pub ms_side: f32,
     /// 0 STEREO, 1 M/S, 2 MID only, 3 SIDE only
     pub chan: usize,
     /// detector hears the external key (when one is connected)
     pub ext: bool,
     /// 0 off, 1 SC, 2 DELTA
     pub listen: usize,
+    pub eq: pultec::EqSet,
 }
 impl Default for State {
     fn default() -> Self {
-        Self { model: 3, k: [0.4, 0.5, 0.3, 0.4, 0.3, 1.0, 0.2], mix: 1.0, out_db: 0.0, safe: true, bypass: false, link: 1.0, chan: 0, ext: false, listen: 0 }
+        Self { model: 3, k: [0.4, 0.5, 0.3, 0.4, 0.3, 1.0, 0.2], mix: 1.0, out_db: 0.0, safe: true, bypass: false, link: 1.0, ms_mid: 1.0, ms_side: 1.0, chan: 0, ext: false, listen: 0, eq: pultec::EqSet::default() }
     }
 }
 
@@ -177,6 +232,7 @@ pub struct Engine {
     byp: awk_ui::BypassRamp,
     ceil: awk_ui::Ceiling,
     meter: awk_ui::PeakFollower,
+    eq: pultec::PushPull,
     pub shared: Arc<Shared>,
 }
 
@@ -203,6 +259,7 @@ impl Engine {
             byp: awk_ui::BypassRamp::default(),
             ceil: awk_ui::Ceiling::default(),
             meter: awk_ui::PeakFollower::default(),
+            eq: pultec::PushPull::new(sr),
             shared: Arc::new(Shared::default()),
         };
         e.byp.set_sr(sr);
@@ -220,6 +277,7 @@ impl Engine {
     }
     pub fn reset(&mut self) {
         self.comp.reset();
+        self.eq.clear();
         self.dry.iter_mut().for_each(|d| d.clear());
     }
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], st: &State) {
@@ -246,7 +304,9 @@ impl Engine {
                 self.ms_key += vu * (0.5 * (a * a + b * b) - self.ms_key);
                 if ms { ((a + b) * 0.5, (a - b) * 0.5) } else { (a, b) }
             });
-            let (cl, cr) = self.comp.tick_key(xl, xr, k, st.link);
+            // M / S: mid and side are compressed independently (no link)
+            let link = if st.chan == 1 { 0.0 } else { st.link };
+            let (cl, cr) = self.comp.tick_key(xl, xr, k, link);
             let (dl, dr) = (self.dry[0].tick(il, self.lat), self.dry[1].tick(ir, self.lat));
             // back to L/R; MID / SIDE only: the other half is the (delayed) dry
             let (cl, cr) = if ms {
@@ -254,7 +314,8 @@ impl Engine {
                 let (m, s) = match st.chan {
                     2 => (cl, ds),
                     3 => (dm, cr),
-                    _ => (cl, cr),
+                    // M / S: MID and SIDE amounts blend each half with its dry
+                    _ => (dm + (cl - dm) * st.ms_mid, ds + (cr - ds) * st.ms_side),
                 };
                 (m + s, m - s)
             } else {
@@ -274,7 +335,11 @@ impl Engine {
                     let mk = self.comp.mk.max(1e-3);
                     ((dl - cl / mk) * self.mix * self.out_g, (dr - cr / mk) * self.mix * self.out_g)
                 }
-                _ => ((dl + (cl - dl) * self.mix) * self.out_g, (dr + (cr - dr) * self.mix) * self.out_g),
+                _ => {
+                    // PUSH-PULL EQ on the compressed signal, before MIX
+                    let (cl, cr) = self.eq.tick(cl, cr, &st.eq);
+                    ((dl + (cl - dl) * self.mix) * self.out_g, (dr + (cr - dr) * self.mix) * self.out_g)
+                }
             };
             // bypass crossfades to the delayed dry, so the latency stays constant
             let w = self.byp.next(st.bypass);
@@ -356,16 +421,29 @@ impl Plugin for Vise {
         }
         let ks = p.knobs();
         let st = State {
-            model: p.model.value().clamp(0, 5) as usize,
+            model: p.model.value().clamp(0, 7) as usize,
             k: std::array::from_fn(|i| ks[i].smoothed.next()),
             mix: p.mix.value(),
             out_db: p.out.smoothed.next(),
             safe: p.safe.value(),
             bypass: p.bypass.value(),
             link: p.link.smoothed.next(),
+            ms_mid: p.ms_mid.smoothed.next(),
+            ms_side: p.ms_side.smoothed.next(),
             chan: p.chan.value().clamp(0, 3) as usize,
             ext: p.ext.value(),
             listen: p.listen.value().clamp(0, 2) as usize,
+            eq: pultec::EqSet {
+                on: p.eq_on.value(),
+                lf: p.eq_lf.value(),
+                lb: p.eq_lb.smoothed.next(),
+                la: p.eq_la.smoothed.next(),
+                hf: p.eq_hf.value(),
+                hb: p.eq_hb.smoothed.next(),
+                bw: p.eq_bw.smoothed.next(),
+                ha: p.eq_ha.smoothed.next(),
+                hs: p.eq_hs.value(),
+            },
         };
         let sl = buffer.as_slice();
         if sl.len() < 2 {
@@ -389,7 +467,7 @@ impl Plugin for Vise {
 
 impl ClapPlugin for Vise {
     const CLAP_ID: &'static str = "com.awknode.vise";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("Six-model compressor");
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("Eight-model compressor with push-pull EQ");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Compressor, ClapFeature::Stereo];

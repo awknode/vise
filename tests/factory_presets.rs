@@ -4,7 +4,9 @@ use serde_json::{json, Map, Value};
 use vise::*;
 
 type Preset = (&'static str, &'static [(&'static str, f64)]);
-// model: 0 670, 1 DS, 2 FAT, 3 ALPHA, 4 SH-A, 5 SH-B
+// model: 0 670, 1 DS, 2 FAT, 3 ALPHA, 4 SH-A, 5 SH-B, 6 76, 7 2A (0.4.0)
+// 76: k1 ratio 0 / .25 / .5 / .75 / 1 = 4 / 8 / 12 / 20 / ALL. 2A: k1 < .5 COMP, >= .5 LIMIT; k2 EMPH; k3 MEMORY.
+// EQ: eq_lf 0 / 1/3 / 2/3 / 1 = 20 / 30 / 60 / 100 Hz; eq_hf 0..1 over 3/4/5/8/10/12/16 kHz; amounts 0..10.
 // (0.3.0: INPUT is 0..+36 dB into a threshold 12 dB higher; k0 for 670/DS/FAT remapped so they sound the same)
 const PRESETS: &[Preset] = &[
     ("670 - Vocal Glue", &[("model", 0.0), ("k0", 0.633), ("k1", 0.55), ("k2", 0.2), ("k3", 0.0), ("k4", 0.35)]),
@@ -35,6 +37,19 @@ const PRESETS: &[Preset] = &[
     ("MS - Master Glue", &[("model", 4.0), ("chan", 1.0), ("link", 0.5), ("k0", 0.35), ("k1", 0.3), ("k2", 0.6), ("k3", 0.5), ("k4", 0.4)]),
     ("MS - Side Tamer", &[("model", 3.0), ("chan", 3.0), ("k0", 0.5), ("k1", 0.45), ("k2", 0.4), ("k3", 0.4), ("k4", 0.1)]),
     ("Unlinked - Overheads", &[("model", 1.0), ("link", 0.0), ("k0", 0.7), ("k1", 0.43), ("k2", 0.35), ("k3", 0.4), ("k4", 0.2)]),
+    // ---- 0.4.0: 76, 2A and the PUSH-PULL EQ
+    ("76 - Vocal Upfront 4-1", &[("model", 6.0), ("k0", 0.45), ("k1", 0.0), ("k2", 0.6), ("k3", 0.35), ("k4", 0.3)]),
+    ("76 - All Buttons Drum Smash", &[("model", 6.0), ("k0", 0.6), ("k1", 1.0), ("k2", 0.5), ("k3", 0.3), ("k4", 0.4), ("gmix", 0.5)]),
+    ("76 - Bass Even-Out 8-1", &[("model", 6.0), ("k0", 0.5), ("k1", 0.25), ("k2", 0.3), ("k3", 0.5), ("k4", 0.35), ("k6", 0.0)]),
+    ("76 - Room Nuke 20-1", &[("model", 6.0), ("k0", 0.7), ("k1", 0.75), ("k2", 0.8), ("k3", 0.15), ("k4", 0.5), ("gmix", 0.45)]),
+    ("2A - Vocal Leveler", &[("model", 7.0), ("k0", 0.45), ("k1", 0.0), ("k2", 0.5), ("k3", 0.5), ("k4", 0.3)]),
+    ("2A - Bass Smooth Limit", &[("model", 7.0), ("k0", 0.5), ("k1", 1.0), ("k2", 0.3), ("k3", 0.6), ("k4", 0.35), ("k6", 0.0)]),
+    ("2A - Bus Gentle Glue", &[("model", 7.0), ("k0", 0.35), ("k1", 0.0), ("k2", 0.4), ("k3", 0.7), ("k4", 0.25)]),
+    ("2A - De-Harsh (Emphasis)", &[("model", 7.0), ("k0", 0.4), ("k1", 0.0), ("k2", 0.9), ("k3", 0.4), ("k4", 0.2)]),
+    ("EQ - Kick Push-Pull 60", &[("model", 3.0), ("k0", 0.3), ("eq_on", 1.0), ("eq_lf", 0.6667), ("eq_lb", 6.0), ("eq_la", 3.0)]),
+    ("EQ - 808 Push-Pull 30", &[("model", 7.0), ("k0", 0.4), ("eq_on", 1.0), ("eq_lf", 0.3333), ("eq_lb", 5.0), ("eq_la", 2.5)]),
+    ("EQ - Vocal Air 12k", &[("model", 7.0), ("k0", 0.45), ("eq_on", 1.0), ("eq_hf", 0.8333), ("eq_hb", 4.0), ("eq_bw", 7.0)]),
+    ("EQ - Mix Bus Push-Pull Trick", &[("model", 4.0), ("k0", 0.3), ("k1", 0.3), ("eq_on", 1.0), ("eq_lf", 0.6667), ("eq_lb", 4.0), ("eq_la", 2.0), ("eq_hf", 0.6667), ("eq_hb", 2.5), ("eq_bw", 8.0), ("eq_ha", 1.5), ("eq_hs", 1.0)]),
 ];
 
 fn build(params: &ViseParams, over: &[(&str, f64)]) -> Value {
@@ -81,6 +96,17 @@ fn factory_presets_are_valid() {
                 "ext" => st.ext = *x != 0.0,
                 "chan" => st.chan = *x as usize,
                 "link" => st.link = *x as f32,
+                "ms_mid" => st.ms_mid = *x as f32,
+                "ms_side" => st.ms_side = *x as f32,
+                "eq_on" => st.eq.on = *x != 0.0,
+                "eq_lf" => st.eq.lf = *x as f32,
+                "eq_lb" => st.eq.lb = *x as f32,
+                "eq_la" => st.eq.la = *x as f32,
+                "eq_hf" => st.eq.hf = *x as f32,
+                "eq_hb" => st.eq.hb = *x as f32,
+                "eq_bw" => st.eq.bw = *x as f32,
+                "eq_ha" => st.eq.ha = *x as f32,
+                "eq_hs" => st.eq.hs = *x as f32,
                 k => st.k[k[1..].parse::<usize>().unwrap()] = *x as f32,
             }
         }

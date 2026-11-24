@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub const WIDTH: u32 = 1000;
-pub const HEIGHT: u32 = 684;
+pub const HEIGHT: u32 = 820;
 /// everything below the preset strip is laid out on a 1000 × 640 board starting here
 const TOP: f32 = 44.0;
 
@@ -33,8 +33,8 @@ const CYAN: Color32 = rgb(0x46, 0xc8, 0xff);
 const SEG_OFF: Color32 = rgb(0x1a, 0x22, 0x2b);
 const HIST: usize = 240;
 
-const MODEL_LINE: [&str; 6] = ["VARI-MU // TUBES // SLOW + THICK", "FET // FAST // DIST 2-3 // NUKE", "BUS // WARMTH + TRANNY", "CLASS A // PAST INFINITY", "OPTO + VCA // IRON // MASTER", "OPTO + VCA // CLASS A GLOW"];
-const SHORT: [&str; 6] = ["VARI-MU", "FET", "BUS", "CLASS A", "OPTO+VCA", "OPTO+VCA A"];
+const MODEL_LINE: [&str; 8] = ["VARI-MU // TUBES // SLOW + THICK", "FET // FAST // DIST 2-3 // NUKE", "BUS // WARMTH + TRANNY", "CLASS A // PAST INFINITY", "OPTO + VCA // IRON // MASTER", "OPTO + VCA // CLASS A GLOW", "FET // FAST // ALL BUTTONS", "OPTO // T4 CELL // SMOOTH"];
+const SHORT: [&str; 8] = ["VARI-MU", "FET", "BUS", "CLASS A", "OPTO+VCA", "OPTO+VCA A", "FET 76", "OPTO T4"];
 
 pub(crate) struct St {
     presets: PresetBar,
@@ -55,6 +55,7 @@ fn new_state(name: &'static str) -> St {
 pub(crate) fn create(params: Arc<ViseParams>, shared: Arc<Shared>) -> Option<crate::nice_app::AwkEditor> {
     let state = params.editor_state.clone();
     let st = new_state("Vise");
+    crate::presets::apply_scale(&state, &params.ui_scale);
     create_egui_editor(state, nice_plug_egui::RepaintNotifier::new(), nice_plug_egui::EguiNiceSettings::default(), crate::nice_app::AwkApp::new(fonts, {
         let mut __st = st;
         Box::new(move |ctx: &mut egui::Ui, setter: &ParamSetter| {
@@ -243,11 +244,11 @@ fn frame(root: &mut egui::Ui, setter: &ParamSetter, st: &mut St, p: &ViseParams,
         let at = |x: f32, y: f32| pos2(x, y) + o;
         let rect = |x: f32, y: f32, w: f32, h: f32| Rect::from_min_size(at(x, y), vec2(w, h));
         let pa = ui.painter().clone();
-        let model = p.model.value().clamp(0, 5) as usize;
+        let model = p.model.value().clamp(0, 7) as usize;
         // header
         txt(&pa, at(28.0, 40.0), Align2::LEFT_CENTER, "VISE", tech(30.0), TXT, 6.0);
         pa.rect_filled(rect(28.0, 60.0, 162.0, 2.0), 0.0, AMBER);
-        txt(&pa, at(206.0, 32.0), Align2::LEFT_CENTER, "DYNAMICS // SIX-MODEL COMPRESSOR", mono(10.0), CYAN, 1.5);
+        txt(&pa, at(206.0, 32.0), Align2::LEFT_CENTER, "DYNAMICS // 8-MODEL COMP + EQ", mono(10.0), CYAN, 1.5);
         txt(&pa, at(206.0, 48.0), Align2::LEFT_CENTER, format!("SYS.0{} // {}", model + 1, MODEL_LINE[model]), mono(10.0), DIMT, 1.0);
         routing(ui, setter, p, sh, o);
         models(ui, setter, p, model, rect(28.0, 76.0, 944.0, 56.0));
@@ -266,9 +267,87 @@ fn frame(root: &mut egui::Ui, setter: &ParamSetter, st: &mut St, p: &ViseParams,
         }
         knob(ui, setter, at(862.0, 490.0), 22.0, &p.mix, "MIX", &format!("{:.0}%", p.mix.value() * 100.0), TXT, "mix");
         knob(ui, setter, at(936.0, 490.0), 22.0, &p.out, "OUTPUT", &format!("{:+.1} dB", p.out.value()), TXT, "out");
-        footer(ui, setter, p, sh, Rect::from_min_max(at(0.0, 606.0), whole.right_bottom()));
-        let _ = st.presets.strip(ui, setter, p, whole, &st.skin, &p.mix, &p.bypass);
+        push_pull(ui, setter, p, rect(28.0, 606.0, 944.0, 130.0));
+        footer(ui, setter, p, sh, Rect::from_min_max(at(0.0, 742.0), whole.right_bottom()));
+        let _ = st.presets.strip(ui, setter, p, whole, &st.skin, &p.mix, &p.bypass, &p.ui_scale);
     });
+}
+
+/// 04 PUSH-PULL EQ (EQP-1A style, after the compressor): ON, LOW FREQ / BOOST / ATTEN,
+/// HIGH FREQ / BOOST / BANDWIDTH / ATTEN / ATTEN SEL.
+fn push_pull(ui: &mut egui::Ui, setter: &ParamSetter, p: &ViseParams, r: Rect) {
+    let pa = ui.painter().clone();
+    panel(&pa, r, "04", "PUSH-PULL EQ");
+    let on = p.eq_on.value();
+    let cr = Rect::from_min_size(r.min + vec2(16.0, 40.0), vec2(84.0, 22.0));
+    if chip(ui, cr, if on { "EQ ON" } else { "EQ OFF" }, on, AMBER, "eq_on").on_hover_text("Boost and cut the same low FREQ together for the push-pull trick: a bump at the bottom with a dip just above it").clicked() {
+        set_bool(setter, &p.eq_on, !on);
+    }
+    txt(&pa, r.min + vec2(16.0, 80.0), Align2::LEFT_CENTER, "BOOST + ATTEN", mono(9.0), FAINT, 1.0);
+    txt(&pa, r.min + vec2(16.0, 94.0), Align2::LEFT_CENTER, "= PUSH-PULL", mono(9.0), FAINT, 1.0);
+    let col = if on { AMBER } else { DIMT };
+    let y = r.top() + 56.0;
+    let amt = |v: f32| format!("{v:.1}");
+    let ks: [(&str, &FloatParam, String, f32); 8] = [
+        ("LOW FREQ", &p.eq_lf, crate::pultec::hz_text(crate::pultec::pick(&crate::pultec::LOW_HZ, p.eq_lf.value())), 186.0),
+        ("BOOST", &p.eq_lb, amt(p.eq_lb.value()), 276.0),
+        ("ATTEN", &p.eq_la, amt(p.eq_la.value()), 366.0),
+        ("HIGH FREQ", &p.eq_hf, crate::pultec::hz_text(crate::pultec::pick(&crate::pultec::HIGH_HZ, p.eq_hf.value())), 486.0),
+        ("BOOST", &p.eq_hb, amt(p.eq_hb.value()), 576.0),
+        ("BANDWIDTH", &p.eq_bw, if p.eq_bw.value() < 3.0 { "SHARP".into() } else if p.eq_bw.value() > 7.0 { "BROAD".into() } else { amt(p.eq_bw.value()) }, 666.0),
+        ("ATTEN", &p.eq_ha, amt(p.eq_ha.value()), 776.0),
+        ("ATTEN SEL", &p.eq_hs, crate::pultec::hz_text(crate::pultec::pick(&crate::pultec::ATT_HZ, p.eq_hs.value())), 866.0),
+    ];
+    txt(&pa, pos2(r.left() + 276.0, r.top() + 12.0), Align2::CENTER_CENTER, "LOW", mono(9.0), DIMT, 2.0);
+    txt(&pa, pos2(r.left() + 576.0, r.top() + 12.0), Align2::CENTER_CENTER, "HIGH", mono(9.0), DIMT, 2.0);
+    pa.rect_filled(Rect::from_min_size(pos2(r.left() + 426.0, r.top() + 22.0), vec2(1.0, 96.0)), 0.0, HAIR);
+    pa.rect_filled(Rect::from_min_size(pos2(r.left() + 721.0, r.top() + 22.0), vec2(1.0, 96.0)), 0.0, HAIR);
+    for (i, (label, param, value, x)) in ks.iter().enumerate() {
+        knob(ui, setter, pos2(r.left() + x, y), 20.0, param, label, value, col, ("eq", i));
+    }
+}
+
+/// Horizontal 0..100% fader (LINK, M/S MID / SIDE). Double-click = 100%.
+fn hfader(ui: &mut egui::Ui, setter: &ParamSetter, bar: Rect, param: &FloatParam, key: &str, label: &str, tip: &str) {
+    let pa = ui.painter().clone();
+    let id = ui.scope_id().with(key);
+    let resp = ui.interact(bar, id, Sense::click_and_drag()).on_hover_text(tip);
+    if resp.double_clicked() {
+        setter.begin_set_parameter(param);
+        setter.set_parameter(param, 1.0);
+        setter.end_set_parameter(param);
+    } else {
+        let at_pointer = |q: Pos2| ((q.x - bar.left() - 4.0) / (bar.width() - 8.0)).clamp(0.0, 1.0);
+        if resp.clicked() {
+            if let Some(q) = resp.interact_pointer_pos() {
+                setter.begin_set_parameter(param);
+                setter.set_parameter(param, at_pointer(q));
+                setter.end_set_parameter(param);
+            }
+        }
+        if resp.drag_started() {
+            setter.begin_set_parameter(param);
+        }
+        if resp.dragged() {
+            if let Some(q) = resp.interact_pointer_pos() {
+                setter.set_parameter(param, at_pointer(q));
+            }
+        }
+        if resp.drag_stopped() {
+            setter.end_set_parameter(param);
+        }
+    }
+    let v = param.value();
+    let pts = chamfer(bar, 5.0);
+    pa.add(Shape::convex_polygon(pts.clone(), if resp.hovered() || resp.dragged() { PANEL_HI } else { PANEL }, Stroke::NONE));
+    let fill = Rect::from_min_max(bar.min + vec2(3.0, 3.0), pos2(bar.left() + 3.0 + (bar.width() - 6.0) * v, bar.bottom() - 3.0));
+    if fill.width() > 0.5 {
+        pa.rect_filled(fill, 0.0, alpha(CYAN, 0.28));
+        glow_line(&pa, vec![pos2(fill.right(), fill.top()), pos2(fill.right(), fill.bottom())], 2.0, CYAN, 0.8);
+    }
+    pa.add(Shape::closed_line(pts, Stroke::new(1.0, EDGE)));
+    let t = if label.is_empty() { format!("{:.0}%", v * 100.0) } else { format!("{label} {:.0}%", v * 100.0) };
+    txt(&pa, bar.center(), Align2::CENTER_CENTER, t, mono(10.0), TXT, 1.0);
 }
 
 /// Header, top right: CHANNELS + LINK, SIDECHAIN (INT / EXT + key level) + LISTEN.
@@ -281,52 +360,20 @@ fn routing(ui: &mut egui::Ui, setter: &ParamSetter, p: &ViseParams, sh: &Shared,
     let chan = p.chan.value().clamp(0, 3) as usize;
     let mut x = 548.0;
     for (i, (s, w)) in [("STEREO", 58.0), ("M / S", 46.0), ("MID", 42.0), ("SIDE", 46.0)].iter().enumerate() {
-        let tip = ["Left and right, linked by LINK", "Mid and side, each compressed (LINK links them)", "Compress the mid only; the side passes", "Compress the side only; the mid passes"][i];
+        let tip = ["Left and right, linked by LINK", "Mid and side, each compressed on its own: MID / SIDE set how much each gets", "Compress the mid only; the side passes", "Compress the side only; the mid passes"][i];
         if chip(ui, chip_at(x, y1, *w), s, chan == i, CYAN, ("chan", i)).on_hover_text(tip).clicked() {
             set_int(setter, &p.chan, i as i32);
         }
         x += w + 4.0;
     }
-    // LINK: a horizontal fader
-    txt(&pa, at(772.0, y1), Align2::LEFT_CENTER, "LINK", mono(9.0), DIMT, 1.5);
-    let bar = Rect::from_min_size(at(806.0, y1 - 9.0), vec2(166.0, 18.0));
-    let id = ui.scope_id().with("link");
-    let resp = ui.interact(bar, id, Sense::click_and_drag()).on_hover_text("Stereo link: 100% = one gain for both channels, 0% = each on its own. Double-click: 100%");
-    if resp.double_clicked() {
-        setter.begin_set_parameter(&p.link);
-        setter.set_parameter(&p.link, 1.0);
-        setter.end_set_parameter(&p.link);
+    if chan == 1 {
+        // M / S: two faders instead of LINK
+        hfader(ui, setter, Rect::from_min_size(at(772.0, y1 - 9.0), vec2(96.0, 18.0)), &p.ms_mid, "ms_mid", "MID", "Mid: how much of the compression the mid gets. Double-click: 100%");
+        hfader(ui, setter, Rect::from_min_size(at(876.0, y1 - 9.0), vec2(96.0, 18.0)), &p.ms_side, "ms_side", "SIDE", "Side: how much of the compression the side gets. Double-click: 100%");
     } else {
-        let at_pointer = |q: Pos2| ((q.x - bar.left() - 4.0) / (bar.width() - 8.0)).clamp(0.0, 1.0);
-        if resp.clicked() {
-            if let Some(q) = resp.interact_pointer_pos() {
-                setter.begin_set_parameter(&p.link);
-                setter.set_parameter(&p.link, at_pointer(q));
-                setter.end_set_parameter(&p.link);
-            }
-        }
-        if resp.drag_started() {
-            setter.begin_set_parameter(&p.link);
-        }
-        if resp.dragged() {
-            if let Some(q) = resp.interact_pointer_pos() {
-                setter.set_parameter(&p.link, at_pointer(q));
-            }
-        }
-        if resp.drag_stopped() {
-            setter.end_set_parameter(&p.link);
-        }
+        txt(&pa, at(772.0, y1), Align2::LEFT_CENTER, "LINK", mono(9.0), DIMT, 1.5);
+        hfader(ui, setter, Rect::from_min_size(at(806.0, y1 - 9.0), vec2(166.0, 18.0)), &p.link, "link", "", "Stereo link: 100% = one gain for both channels, 0% = each on its own. Double-click: 100%");
     }
-    let v = p.link.value();
-    let pts = chamfer(bar, 5.0);
-    pa.add(Shape::convex_polygon(pts.clone(), if resp.hovered() || resp.dragged() { PANEL_HI } else { PANEL }, Stroke::NONE));
-    let fill = Rect::from_min_max(bar.min + vec2(3.0, 3.0), pos2(bar.left() + 3.0 + (bar.width() - 6.0) * v, bar.bottom() - 3.0));
-    if fill.width() > 0.5 {
-        pa.rect_filled(fill, 0.0, alpha(CYAN, 0.28));
-        glow_line(&pa, vec![pos2(fill.right(), fill.top()), pos2(fill.right(), fill.bottom())], 2.0, CYAN, 0.8);
-    }
-    pa.add(Shape::closed_line(pts, Stroke::new(1.0, EDGE)));
-    txt(&pa, bar.center(), Align2::CENTER_CENTER, format!("{:.0}%", v * 100.0), mono(10.0), TXT, 1.0);
     // SIDECHAIN
     txt(&pa, at(470.0, y2), Align2::LEFT_CENTER, "SIDECHAIN", mono(9.0), DIMT, 1.5);
     let ext = p.ext.value();
@@ -357,8 +404,9 @@ fn routing(ui: &mut egui::Ui, setter: &ParamSetter, p: &ViseParams, sh: &Shared,
 }
 
 fn models(ui: &mut egui::Ui, setter: &ParamSetter, p: &ViseParams, model: usize, r: Rect) {
-    let tw = (r.width() - 40.0) / 6.0;
-    for i in 0..6 {
+    let n = comp::N_MODELS;
+    let tw = (r.width() - 8.0 * (n - 1) as f32) / n as f32;
+    for i in 0..n {
         let tr = Rect::from_min_size(pos2(r.left() + i as f32 * (tw + 8.0), r.top()), vec2(tw, r.height()));
         let resp = ui.interact(tr, ui.scope_id().with(("model", i)), Sense::click());
         if resp.clicked() {
@@ -735,9 +783,9 @@ mod tests {
         let setter = ParamSetter::new(&mock);
         let mut texs = HashMap::new();
         let k = |n: &str, v: f32| FloatParam::new(n, v, FloatRange::Linear { min: 0.0, max: 1.0 });
-        for (n, (model, vu)) in [(3i32, 0i32), (0, 1), (1, 0)].iter().enumerate() {
+        for (n, (model, vu)) in [(3i32, 0i32), (0, 1), (1, 0), (6, 0)].iter().enumerate() {
             let mut p = ViseParams::default();
-            p.model = IntParam::new("m", *model, IntRange::Linear { min: 0, max: 5 });
+            p.model = IntParam::new("m", *model, IntRange::Linear { min: 0, max: 7 });
             p.vu = IntParam::new("v", *vu, IntRange::Linear { min: 0, max: 2 });
             p.k0 = k("k0", 0.62);
             let mut stt = State::default();
@@ -748,6 +796,12 @@ mod tests {
                 p.link = FloatParam::new("l", 0.6, FloatRange::Linear { min: 0.0, max: 1.0 });
                 stt.chan = 1;
                 stt.link = 0.6;
+            }
+            if *model == 6 {
+                p.eq_on = BoolParam::new("eq", true);
+                p.eq_lb = FloatParam::new("lb", 6.0, FloatRange::Linear { min: 0.0, max: 10.0 });
+                p.eq_la = FloatParam::new("la", 3.0, FloatRange::Linear { min: 0.0, max: 10.0 });
+                p.eq_hb = FloatParam::new("hb", 4.0, FloatRange::Linear { min: 0.0, max: 10.0 });
             }
             if *model == 1 {
                 p.ext = BoolParam::new("e", true);

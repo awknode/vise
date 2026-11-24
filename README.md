@@ -4,6 +4,8 @@
 
 ![VISE](docs/images/screenshot.png)
 
+![VISE mid/side mode](docs/images/mid-side.png)
+
 VISE has six compressor models: a vari-mu tube unit, a fast FET, a bus compressor, a class-A unit and two opto + VCA designs. Each model has its own knob set, and the labels change with the model. A 200° LED arc meter shows gain reduction, input or output.
 
 ## Features

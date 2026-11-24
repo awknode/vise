@@ -176,6 +176,21 @@ impl Biq {
         self.b = [1.0, 0.0, 0.0];
         self.a = [0.0, 0.0];
     }
+    /// RBJ shelf (low or high), slope S (1 = steepest without overshoot).
+    pub fn shelf(&mut self, f: f32, gain_db: f32, s: f32, high: bool, sr: f32) {
+        let a = 10f32.powf(gain_db / 40.0);
+        let w = TAU * (f / sr).clamp(1e-5, 0.49);
+        let (sn, c) = w.sin_cos();
+        let al = sn / 2.0 * ((a + 1.0 / a) * (1.0 / s - 1.0) + 2.0).max(0.0).sqrt();
+        let sq = 2.0 * a.sqrt() * al;
+        let (b0, b1, b2, a0, a1, a2) = if !high {
+            (a * ((a + 1.0) - (a - 1.0) * c + sq), 2.0 * a * ((a - 1.0) - (a + 1.0) * c), a * ((a + 1.0) - (a - 1.0) * c - sq), (a + 1.0) + (a - 1.0) * c + sq, -2.0 * ((a - 1.0) + (a + 1.0) * c), (a + 1.0) + (a - 1.0) * c - sq)
+        } else {
+            (a * ((a + 1.0) + (a - 1.0) * c + sq), -2.0 * a * ((a - 1.0) + (a + 1.0) * c), a * ((a + 1.0) + (a - 1.0) * c - sq), (a + 1.0) - (a - 1.0) * c + sq, 2.0 * ((a - 1.0) - (a + 1.0) * c), (a + 1.0) - (a - 1.0) * c - sq)
+        };
+        self.b = [b0 / a0, b1 / a0, b2 / a0];
+        self.a = [a1 / a0, a2 / a0];
+    }
     #[inline]
     pub fn tick(&mut self, x: f32) -> f32 {
         let y = self.b[0] * x + self.z[0];
